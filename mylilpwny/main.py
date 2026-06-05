@@ -156,6 +156,38 @@ def scan(
 
 
 @app.command()
+def exploit(
+    ctx: typer.Context,
+    target: Annotated[Optional[str], typer.Option("--target", "-t", help="Override global target")] = None,
+    module: Annotated[Optional[str], typer.Option("--module", "-m", help="MSF module path (e.g. exploit/multi/handler)")] = None,
+    port: Annotated[int, typer.Option("--port", "-p", help="Target port")] = 0,
+    service: Annotated[Optional[str], typer.Option("--service", help="Service keyword to search MSF modules")] = None,
+    confirm: Annotated[bool, typer.Option("--confirm", help="Required to actually execute an exploit")] = False,
+    msf_password: Annotated[str, typer.Option("--msf-password", help="msfrpcd password", envvar="MSF_PASSWORD")] = "",
+) -> None:
+    """List or execute Metasploit exploit modules. Execution requires --confirm."""
+    obj: AppContext = ctx.obj
+    log = get_logger("exploit")
+    effective_target = target or obj.target
+
+    if not effective_target:
+        console.print("[red]Error:[/red] --target is required.")
+        raise typer.Exit(1)
+
+    if module and not confirm:
+        console.print("[red]Error:[/red] --confirm is required to execute an exploit.")
+        console.print("[dim]Use --confirm only against targets you own or have explicit written permission to test.[/dim]")
+        raise typer.Exit(1)
+
+    if obj.dry_run:
+        console.print(f"[yellow]DRY RUN[/yellow] exploit module={module or '(list)'} target={effective_target}")
+        return
+
+    log.warning("exploit command invoked", target=effective_target, module=module, confirmed=confirm)
+    console.print("[dim]Exploit module not yet wired to pipeline — use the module API directly.[/dim]")
+
+
+@app.command()
 def report(
     ctx: typer.Context,
     session_id: Annotated[Optional[str], typer.Option("--session", "-s", help="Session ID to report on")] = None,
