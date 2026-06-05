@@ -1,0 +1,25 @@
+mode: semi-auto
+
+rate_limit:
+  rps: 10
+  max_concurrent_targets: 5
+
+scope_file: null
+
+tool_paths:
+  nmap: nmap
+  masscan: masscan
+  whatweb: whatweb
+  feroxbuster: feroxbuster
+  searchsploit: searchsploit
+  subfinder: subfinder
+  nuclei: nuclei
+
+output_dir: output
+
+timeouts:
+  recon: 60
+  portscan: 300
+  servicenum: 120
+  vulnanalysis: 60
+  default: 60
