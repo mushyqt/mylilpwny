@@ -1,0 +1,41 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+*.so
+*.egg
+*.egg-info/
+dist/
+build/
+.eggs/
+.venv/
+venv/
+env/
+.env
+
+# Secrets & keys
+*.key
+*.pem
+*.p12
+*.pfx
+.env.*
+secrets.yaml
+secrets.json
+
+# Output & run artifacts
+output/
+*.log
+
+# Tools & caches
+.mypy_cache/
+.ruff_cache/
+.pytest_cache/
+.coverage
+htmlcov/
+.DS_Store
+
+# IDE
+.vscode/
+.idea/
+*.swp
