@@ -23,12 +23,14 @@ class ToolStatus:
 
 
 TOOLS: list[ToolSpec] = [
+    # --- Required ---
     ToolSpec(
         name="nmap",
         required=True,
         description="Port scanning and service detection",
         install_hint="pacman -S nmap  |  apt install nmap",
     ),
+    # --- Recon ---
     ToolSpec(
         name="masscan",
         required=False,
@@ -36,40 +38,43 @@ TOOLS: list[ToolSpec] = [
         install_hint="pacman -S masscan  |  apt install masscan",
     ),
     ToolSpec(
+        name="amass",
+        required=False,
+        description="Subdomain enumeration (passive + active)",
+        install_hint="pacman -S amass  |  apt install amass",
+    ),
+    ToolSpec(
+        name="gobuster",
+        required=False,
+        description="DNS subdomain + directory/file brute-forcing",
+        install_hint="pacman -S gobuster  |  apt install gobuster",
+    ),
+    ToolSpec(
+        name="ffuf",
+        required=False,
+        description="Fast web fuzzer for directories, files, and vhosts",
+        install_hint="pacman -S ffuf  |  apt install ffuf",
+    ),
+    # --- Web ---
+    ToolSpec(
         name="whatweb",
         required=False,
         description="Web technology fingerprinting",
         install_hint="pacman -S whatweb  |  apt install whatweb",
     ),
-    ToolSpec(
-        name="feroxbuster",
-        required=False,
-        description="Directory and file brute-forcing",
-        install_hint="pacman -S feroxbuster  |  cargo install feroxbuster",
-    ),
+    # --- Vuln analysis ---
     ToolSpec(
         name="searchsploit",
         required=False,
         description="Exploit database search (part of exploitdb)",
         install_hint="pacman -S exploitdb  |  apt install exploitdb",
     ),
-    ToolSpec(
-        name="subfinder",
-        required=False,
-        description="Subdomain enumeration",
-        install_hint="go install -v github.com/projectdiscovery/subfinder/v2/cmd/subfinder@latest",
-    ),
+    # --- Bug bounty (Phase 4) ---
     ToolSpec(
         name="nuclei",
         required=False,
         description="Vulnerability scanner (used in bug bounty mode)",
         install_hint="go install -v github.com/projectdiscovery/nuclei/v3/cmd/nuclei@latest",
-    ),
-    ToolSpec(
-        name="httpx",
-        required=False,
-        description="HTTP probing and fingerprinting",
-        install_hint="go install -v github.com/projectdiscovery/httpx/cmd/httpx@latest",
     ),
 ]
 
