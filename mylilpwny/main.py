@@ -8,7 +8,10 @@ from rich.console import Console
 from rich.panel import Panel
 from rich.text import Text
 
+from rich.table import Table
+
 from mylilpwny.config import Config
+from mylilpwny.core.deps import check_all, missing_required
 from mylilpwny.core.scope import ScopeValidator
 from mylilpwny.logging import get_logger, setup_logging
 
@@ -169,6 +172,39 @@ def report(
     log.info("report requested", session_id=session_id, format=fmt)
     console.print(f"Generating [bold]{fmt}[/bold] report for session [cyan]{session_id}[/cyan]")
     console.print("[dim]Reporting not yet implemented — coming in Sprint 5.[/dim]")
+
+
+@app.command("check-deps")
+def check_deps() -> None:
+    """Check which external tools are installed."""
+    statuses = check_all()
+
+    table = Table(title="External tool dependencies", show_lines=False)
+    table.add_column("Tool", style="bold")
+    table.add_column("Status")
+    table.add_column("Type")
+    table.add_column("Path / Hint")
+
+    for s in statuses:
+        if s.installed:
+            status = "[green]✓ installed[/green]"
+            detail = f"[dim]{s.path}[/dim]"
+        else:
+            status = "[red]✗ missing[/red]"
+            detail = f"[yellow]{s.spec.install_hint}[/yellow]"
+
+        kind = "[red]required[/red]" if s.spec.required else "[dim]optional[/dim]"
+        table.add_row(s.spec.name, status, kind, detail)
+
+    console.print(table)
+
+    absent = missing_required(statuses)
+    if absent:
+        names = ", ".join(s.spec.name for s in absent)
+        console.print(f"\n[red]Error:[/red] required tools missing: {names}")
+        raise typer.Exit(1)
+    else:
+        console.print("\n[green]All required tools are installed.[/green]")
 
 
 @app.command()
