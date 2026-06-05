@@ -140,7 +140,11 @@ class Orchestrator:
             async def _run_one(target: Target) -> RunResult:
                 async with semaphore:
                     progress.update(overall, description=f"[cyan]{target.input}")
-                    pipeline = Pipeline(self.config, self.scope, self.rate_limiter)
+                    pipeline = Pipeline(
+                        self.config, self.scope, self.rate_limiter,
+                        session_manager=self.session_manager,
+                        session_id=session_id,
+                    )
                     try:
                         stage_results = await pipeline.run(
                             target, stages=stages, skip=skip,

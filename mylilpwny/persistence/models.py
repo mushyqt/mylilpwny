@@ -2,7 +2,20 @@ from __future__ import annotations
 
 import uuid
 from datetime import datetime, timezone
-from typing import Any
+from typing import Any, Literal
+
+# Canonical severity levels — order matches ascending criticality
+FindingSeverity = Literal["info", "low", "medium", "high", "critical"]
+
+# Canonical finding types produced by pipeline stages
+FindingType = Literal[
+    "recon",
+    "open_port",
+    "service",
+    "vulnerability",
+    "credential",
+    "web_finding",
+]
 
 from sqlalchemy import JSON, DateTime, ForeignKey, Integer, String, Text
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship

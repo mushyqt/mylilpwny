@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import asyncio
 from dataclasses import dataclass, field
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from mylilpwny.config import Config
 from mylilpwny.core.ratelimit import RateLimiter
@@ -14,6 +14,9 @@ from mylilpwny.modules.portscan import PortScanModule
 from mylilpwny.modules.recon import ReconModule
 from mylilpwny.modules.servicenum import ServiceEnumModule
 from mylilpwny.modules.vulnanalysis import VulnAnalysisModule
+
+if TYPE_CHECKING:
+    from mylilpwny.persistence.session import SessionManager
 
 log = get_logger(__name__)
 
@@ -95,11 +98,19 @@ async def _run_stage_with_timeout(
 class Pipeline:
     """Async pipeline runner: recon → portscan → servicenum → vulnanalysis."""
 
-    def __init__(self, config: Config, scope: ScopeValidator,
-                 rate_limiter: RateLimiter | None = None) -> None:
+    def __init__(
+        self,
+        config: Config,
+        scope: ScopeValidator,
+        rate_limiter: RateLimiter | None = None,
+        session_manager: SessionManager | None = None,
+        session_id: str | None = None,
+    ) -> None:
         self.config = config
         self.scope = scope
         self.rate_limiter = rate_limiter
+        self.session_manager = session_manager
+        self.session_id = session_id
 
     async def run(
         self,
@@ -142,6 +153,13 @@ class Pipeline:
             if self.rate_limiter:
                 await self.rate_limiter.acquire(target.input)
 
+            sm = self.session_manager
+            sid = self.session_id
+
+            if sm and sid:
+                sm.audit(sid, "stage_start", target=target.input, module=stage,
+                         detail={"dry_run": dry_run})
+
             log.info("stage started", stage=stage, target=target.input, dry_run=dry_run)
 
             try:
@@ -160,14 +178,37 @@ class Pipeline:
                 log.info("stage complete", stage=stage, findings=len(result.parsed_findings),
                          duration=round(result.duration, 2))
 
+                if sm and sid:
+                    sm.log_tool_run(
+                        sid,
+                        target=target.input,
+                        module=stage,
+                        command=result.command_run,
+                        exit_code=0 if result.status == "success" else 1,
+                        duration=result.duration,
+                        status=result.status,
+                    )
+                    sm.audit(sid, "stage_complete", target=target.input, module=stage,
+                             detail={"findings": len(result.parsed_findings),
+                                     "duration": round(result.duration, 2)})
+                    if result.status == "success" and not dry_run:
+                        sm.persist_stage_findings(sid, target.input, stage,
+                                                  result.parsed_findings)
+
             except asyncio.TimeoutError:
                 msg = f"stage '{stage}' timed out after {timeout}s"
                 log.error(msg, stage=stage)
                 results.append(StageResult(stage=stage, error=msg))
+                if sm and sid:
+                    sm.audit(sid, "stage_failed", target=target.input, module=stage,
+                             detail={"error": msg})
 
             except Exception as e:
                 log.error("stage failed", stage=stage, error=str(e))
                 results.append(StageResult(stage=stage, error=str(e)))
+                if sm and sid:
+                    sm.audit(sid, "stage_failed", target=target.input, module=stage,
+                             detail={"error": str(e)})
 
         return results
 
