@@ -4,7 +4,7 @@ import asyncio
 import ipaddress
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from rich.progress import BarColumn, Progress, SpinnerColumn, TaskProgressColumn, TextColumn, TimeElapsedColumn
 
@@ -12,8 +12,11 @@ from mylilpwny.config import Config
 from mylilpwny.core.pipeline import Pipeline, StageResult
 from mylilpwny.core.ratelimit import RateLimiter
 from mylilpwny.core.scope import ScopeValidator
-from mylilpwny.core.state import Target
+from mylilpwny.core.state import Target, TargetState
 from mylilpwny.logging import get_logger
+
+if TYPE_CHECKING:
+    from mylilpwny.persistence.session import SessionManager
 
 log = get_logger(__name__)
 
@@ -73,9 +76,15 @@ class RunResult:
 class Orchestrator:
     """Runs the pipeline across multiple targets with concurrency control and progress display."""
 
-    def __init__(self, config: Config, scope: ScopeValidator) -> None:
+    def __init__(
+        self,
+        config: Config,
+        scope: ScopeValidator,
+        session_manager: SessionManager | None = None,
+    ) -> None:
         self.config = config
         self.scope = scope
+        self.session_manager = session_manager
         self.rate_limiter = RateLimiter(
             global_rps=float(self.config.rate_limit.rps),
             per_target_rps=float(self.config.rate_limit.rps),
@@ -88,13 +97,31 @@ class Orchestrator:
         skip: list[str] | None = None,
         dry_run: bool = False,
         extra: dict[str, Any] | None = None,
+        session_id: str | None = None,
     ) -> list[RunResult]:
         targets_raw = expand_target(raw_target)
         log.info("targets expanded", count=len(targets_raw), input=raw_target)
 
-        targets = [Target(input=t, ip=t if _is_ip(t) else None,
-                          hostname=None if _is_ip(t) else t)
-                   for t in targets_raw]
+        # On resume: load already-completed targets from DB so we can skip done stages.
+        completed: dict[str, str] = {}  # target_input → last completed state
+        if session_id and self.session_manager:
+            for tr in self.session_manager.get_targets(session_id):
+                completed[tr.input] = tr.state
+
+        targets = []
+        for t in targets_raw:
+            tgt = Target(
+                input=t,
+                ip=t if _is_ip(t) else None,
+                hostname=None if _is_ip(t) else t,
+            )
+            # Restore state from DB if resuming
+            if t in completed:
+                try:
+                    tgt.state = TargetState(completed[t])
+                except ValueError:
+                    pass
+            targets.append(tgt)
 
         max_concurrent = self.config.rate_limit.max_concurrent_targets
         semaphore = asyncio.Semaphore(max_concurrent)
@@ -121,12 +148,31 @@ class Orchestrator:
                         )
                         log.info("target complete", target=target.input,
                                  stages_run=len(stage_results))
-                        return RunResult(target=target, stage_results=stage_results)
+                        result = RunResult(target=target, stage_results=stage_results)
                     except Exception as e:
                         log.error("target failed", target=target.input, error=str(e))
-                        return RunResult(target=target, error=str(e))
+                        result = RunResult(target=target, error=str(e))
                     finally:
                         progress.advance(overall)
+
+                    # Persist target state
+                    if session_id and self.session_manager:
+                        self.session_manager.upsert_target(
+                            session_id,
+                            target.input,
+                            ip=target.ip,
+                            hostname=target.hostname,
+                            state=target.state.value,
+                            metadata=target.metadata,
+                        )
+                        self.session_manager.audit(
+                            session_id,
+                            "target_complete" if result.error is None else "target_failed",
+                            target=target.input,
+                            detail={"error": result.error, "stages": len(result.stage_results)},
+                        )
+
+                    return result
 
             results = list(await asyncio.gather(*[_run_one(t) for t in targets]))
 

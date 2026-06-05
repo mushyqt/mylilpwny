@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import uuid
 from datetime import datetime, timezone
+from typing import Any
 
 from sqlalchemy import JSON, DateTime, ForeignKey, Integer, String, Text
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
@@ -29,8 +30,8 @@ class Session(Base):
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=_now, onupdate=_now
     )
-    config_snapshot: Mapped[dict] = mapped_column(JSON, default=dict)
-    scope: Mapped[list] = mapped_column(JSON, default=list)
+    config_snapshot: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
+    scope: Mapped[list[str]] = mapped_column(JSON, default=list)
     status: Mapped[str] = mapped_column(String(32), default="running")
     objective: Mapped[str | None] = mapped_column(String(64), nullable=True)
 
@@ -59,7 +60,7 @@ class TargetRecord(Base):
     ip: Mapped[str | None] = mapped_column(String(45), nullable=True)
     hostname: Mapped[str | None] = mapped_column(String(256), nullable=True)
     state: Mapped[str] = mapped_column(String(32), default="discovered")
-    metadata_json: Mapped[dict] = mapped_column(JSON, default=dict)
+    metadata_json: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=_now, onupdate=_now
     )
@@ -85,7 +86,7 @@ class Finding(Base):
     severity: Mapped[str] = mapped_column(String(16), default="info")
     title: Mapped[str] = mapped_column(String(512))
     description: Mapped[str] = mapped_column(Text, default="")
-    evidence: Mapped[dict] = mapped_column(JSON, default=dict)
+    evidence: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
 
     session: Mapped[Session] = relationship(back_populates="findings")
     target_record: Mapped[TargetRecord | None] = relationship(back_populates="findings")
@@ -120,6 +121,6 @@ class AuditEntry(Base):
     event_type: Mapped[str] = mapped_column(String(64))
     target: Mapped[str | None] = mapped_column(String(256), nullable=True)
     module: Mapped[str | None] = mapped_column(String(64), nullable=True)
-    detail: Mapped[dict] = mapped_column(JSON, default=dict)
+    detail: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
 
     session: Mapped[Session] = relationship(back_populates="audit_entries")

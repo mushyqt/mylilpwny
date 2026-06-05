@@ -8,7 +8,6 @@ import typer
 from rich.console import Console
 from rich.panel import Panel
 from rich.text import Text
-
 from rich.table import Table
 
 from mylilpwny.config import Config
@@ -16,6 +15,8 @@ from mylilpwny.core.deps import check_all, missing_required
 from mylilpwny.core.orchestrator import Orchestrator
 from mylilpwny.core.scope import ScopeValidator
 from mylilpwny.logging import get_logger, setup_logging
+from mylilpwny.persistence.db import setup_database
+from mylilpwny.persistence.session import SessionManager
 
 app = typer.Typer(
     name="mylilpwny",
@@ -38,6 +39,7 @@ class AppContext:
         dry_run: bool,
         output: Path,
         scope: ScopeValidator,
+        session_manager: SessionManager,
     ) -> None:
         self.target = target
         self.scope_file = scope_file
@@ -45,6 +47,7 @@ class AppContext:
         self.dry_run = dry_run
         self.output = output
         self.scope = scope
+        self.session_manager = session_manager
 
 
 @app.callback()
@@ -77,6 +80,9 @@ def main(
     else:
         scope = ScopeValidator([])
 
+    _, factory = setup_database(Path(cfg.output_dir) / "mylilpwny.db")
+    sm = SessionManager(factory)
+
     ctx.obj = AppContext(
         target=target,
         scope_file=scope_file,
@@ -84,6 +90,7 @@ def main(
         dry_run=dry_run,
         output=Path(cfg.output_dir),
         scope=scope,
+        session_manager=sm,
     )
 
 
@@ -93,27 +100,55 @@ def run(
     target: Annotated[Optional[str], typer.Option("--target", "-t", help="Override global target")] = None,
     skip: Annotated[Optional[str], typer.Option("--skip", help="Comma-separated stages to skip")] = None,
     stages: Annotated[Optional[str], typer.Option("--stages", help="Comma-separated stages to run (default: all)")] = None,
+    resume: Annotated[Optional[str], typer.Option("--resume", help="Resume a previous session by ID")] = None,
 ) -> None:
     """Run the full recon → scan → enum → analysis pipeline."""
     obj: AppContext = ctx.obj
-    log = get_logger("run")
+    lg = get_logger("run")
     effective_target = target or obj.target
 
-    if not effective_target:
+    if not effective_target and not resume:
         console.print("[red]Error:[/red] --target is required for run.")
         raise typer.Exit(1)
 
     run_dir = setup_logging(obj.output)
-    log.info("run started", target=effective_target, dry_run=obj.dry_run, run_dir=str(run_dir))
+
+    # Resolve session: resume existing or create new
+    session_id: str
+    if resume:
+        existing = obj.session_manager.get_session(resume)
+        if existing is None:
+            console.print(f"[red]Error:[/red] Session [cyan]{resume}[/cyan] not found.")
+            raise typer.Exit(1)
+        session_id = resume
+        if not effective_target:
+            # Infer target from first persisted target record
+            targets_db = obj.session_manager.get_targets(session_id)
+            if targets_db:
+                effective_target = ",".join(t.input for t in targets_db)
+            else:
+                console.print("[red]Error:[/red] Cannot resume: no targets found in session.")
+                raise typer.Exit(1)
+        console.print(f"[yellow]Resuming session[/yellow] [cyan]{session_id}[/cyan]")
+    else:
+        session_id = obj.session_manager.create_session(
+            scope=obj.scope.entries,
+            config_snapshot=obj.config.model_dump(),
+            objective=stages,
+        )
+
+    lg.info("run started", target=effective_target, dry_run=obj.dry_run,
+            session_id=session_id, run_dir=str(run_dir))
 
     border = "yellow" if obj.dry_run else "green"
     label = "DRY RUN\n\n" if obj.dry_run else ""
     console.print(Panel(
         Text.from_markup(
             f"[bold]{label}[/bold]"
-            f"Target : [cyan]{effective_target}[/cyan]\n"
-            f"Mode   : [yellow]{obj.config.mode}[/yellow]\n"
-            f"Output : {obj.output}"
+            f"Target  : [cyan]{effective_target}[/cyan]\n"
+            f"Session : [dim]{session_id}[/dim]\n"
+            f"Mode    : [yellow]{obj.config.mode}[/yellow]\n"
+            f"Output  : {obj.output}"
             + ("\n\n[dim]No tools will be executed.[/dim]" if obj.dry_run else "")
         ),
         title="mylilpwny run",
@@ -123,17 +158,22 @@ def run(
     skip_list = [s.strip() for s in skip.split(",")] if skip else None
     stages_list = [s.strip() for s in stages.split(",")] if stages else None
 
-    orchestrator = Orchestrator(obj.config, obj.scope)
+    orchestrator = Orchestrator(obj.config, obj.scope, session_manager=obj.session_manager)
     results = asyncio.run(orchestrator.run(
-        effective_target,
+        effective_target,  # type: ignore[arg-type]
         stages=stages_list,
         skip=skip_list,
         dry_run=obj.dry_run,
+        session_id=session_id,
     ))
 
-    # Summary
     success = sum(1 for r in results if r.success)
-    console.print(f"\n[bold]Done.[/bold] {success}/{len(results)} targets completed successfully.")
+    final_status = "complete" if success == len(results) else "partial"
+    obj.session_manager.update_status(session_id, final_status)
+    console.print(
+        f"\n[bold]Done.[/bold] {success}/{len(results)} targets completed. "
+        f"Session: [cyan]{session_id}[/cyan]"
+    )
 
 
 @app.command()
@@ -244,6 +284,69 @@ def check_deps() -> None:
         raise typer.Exit(1)
     else:
         console.print("\n[green]All required tools are installed.[/green]")
+
+
+@app.command("sessions")
+def list_sessions(
+    ctx: typer.Context,
+    limit: Annotated[int, typer.Option("--limit", "-n", help="Max sessions to show")] = 20,
+) -> None:
+    """List recent pentest sessions."""
+    obj: AppContext = ctx.obj
+    rows = obj.session_manager.list_sessions(limit=limit)
+    if not rows:
+        console.print("[dim]No sessions found.[/dim]")
+        return
+
+    table = Table(title="Sessions", show_lines=False)
+    table.add_column("ID", style="cyan", no_wrap=True)
+    table.add_column("Created", style="dim")
+    table.add_column("Status")
+    table.add_column("Objective")
+    table.add_column("Targets")
+
+    for s in rows:
+        status_style = {"running": "yellow", "complete": "green", "partial": "blue"}.get(
+            s.status, "dim"
+        )
+        table.add_row(
+            s.id,
+            s.created_at.strftime("%Y-%m-%d %H:%M") if s.created_at else "—",
+            f"[{status_style}]{s.status}[/{status_style}]",
+            s.objective or "—",
+            str(len(s.targets)),
+        )
+    console.print(table)
+
+
+@app.command("log")
+def audit_log(
+    ctx: typer.Context,
+    session_id: Annotated[str, typer.Argument(help="Session ID")],
+) -> None:
+    """Show the audit log for a session."""
+    obj: AppContext = ctx.obj
+    entries = obj.session_manager.get_audit_log(session_id)
+    if not entries:
+        console.print(f"[dim]No audit entries for session {session_id}.[/dim]")
+        return
+
+    table = Table(title=f"Audit log — {session_id}", show_lines=False)
+    table.add_column("Timestamp", style="dim", no_wrap=True)
+    table.add_column("Event", style="bold")
+    table.add_column("Target")
+    table.add_column("Module")
+    table.add_column("Detail")
+
+    for e in entries:
+        table.add_row(
+            e.timestamp.strftime("%H:%M:%S") if e.timestamp else "—",
+            e.event_type,
+            e.target or "—",
+            e.module or "—",
+            str(e.detail) if e.detail else "—",
+        )
+    console.print(table)
 
 
 @app.command()

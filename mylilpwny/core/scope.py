@@ -16,6 +16,7 @@ class ScopeValidator:
     """
 
     def __init__(self, entries: list[str]) -> None:
+        self._raw_entries: list[str] = [e.strip() for e in entries if e.strip() and not e.startswith("#")]
         self._ips: list[ipaddress.IPv4Address | ipaddress.IPv6Address] = []
         self._networks: list[ipaddress.IPv4Network | ipaddress.IPv6Network] = []
         self._hostnames: set[str] = set()
@@ -23,6 +24,10 @@ class ScopeValidator:
 
         for entry in entries:
             self._parse(entry.strip())
+
+    @property
+    def entries(self) -> list[str]:
+        return list(self._raw_entries)
 
     def _parse(self, entry: str) -> None:
         if not entry or entry.startswith("#"):

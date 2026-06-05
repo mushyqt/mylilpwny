@@ -46,7 +46,7 @@ def load_plugins(plugin_dir: Path | str) -> dict[str, type[BaseModule]]:
                 continue
             mod = importlib.util.module_from_spec(spec)
             sys.modules[module_name] = mod
-            spec.loader.exec_module(mod)  # type: ignore[union-attr]
+            spec.loader.exec_module(mod)
             log.debug("plugin file imported", file=py_file.name)
         except Exception as exc:
             log.warning("plugin import failed — skipping", file=py_file.name, error=str(exc))
@@ -64,7 +64,7 @@ def load_plugins(plugin_dir: Path | str) -> dict[str, type[BaseModule]]:
             log.warning("duplicate plugin name — keeping first registered",
                         name=plugin_name, duplicate=cls.__name__)
             continue
-        registry[plugin_name] = cls  # type: ignore[assignment]
+        registry[plugin_name] = cls
         log.info("plugin registered", name=plugin_name, cls=cls.__name__)
 
     return registry
