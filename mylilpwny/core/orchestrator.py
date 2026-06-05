@@ -140,6 +140,12 @@ class Orchestrator:
             async def _run_one(target: Target) -> RunResult:
                 async with semaphore:
                     progress.update(overall, description=f"[cyan]{target.input}")
+
+                    # Pre-populate target with findings from previous stages
+                    # so that later stages (e.g. vulnanalysis) have the data they need.
+                    if session_id and self.session_manager:
+                        _hydrate_target(target, session_id, self.session_manager)
+
                     pipeline = Pipeline(
                         self.config, self.scope, self.rate_limiter,
                         session_manager=self.session_manager,
@@ -191,3 +197,20 @@ def _is_ip(value: str) -> bool:
         return True
     except ValueError:
         return False
+
+
+def _hydrate_target(target: Target, session_id: str, sm: "SessionManager") -> None:
+    """Load port and service findings from DB into the Target object.
+
+    Called before running a pipeline stage so that stages like vulnanalysis
+    have access to findings from portscan/servicenum even when run in isolation.
+    """
+    from mylilpwny.persistence.session import SessionManager  # noqa: F401 — local import avoids circular
+
+    ports = sm.get_findings_for_target(session_id, target.input, finding_type="open_port")
+    if ports:
+        target.ports = [f.evidence for f in ports if f.evidence]
+
+    services = sm.get_findings_for_target(session_id, target.input, finding_type="service")
+    if services:
+        target.services = [f.evidence for f in services if f.evidence]

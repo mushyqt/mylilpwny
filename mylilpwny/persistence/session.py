@@ -296,6 +296,30 @@ class SessionManager:
             )
         return len(rows)
 
+    def get_findings_for_target(
+        self,
+        session_id: str,
+        target_input: str,
+        *,
+        finding_type: str | None = None,
+    ) -> list[Finding]:
+        """Return findings scoped to a specific target input string."""
+        db: SASession = self._factory()
+        try:
+            tr = (
+                db.query(TargetRecord)
+                .filter_by(session_id=session_id, input=target_input)
+                .first()
+            )
+            if tr is None:
+                return []
+            q = db.query(Finding).filter_by(session_id=session_id, target_id=str(tr.id))
+            if finding_type:
+                q = q.filter(Finding.finding_type == finding_type)
+            return q.order_by(Finding.timestamp).all()
+        finally:
+            db.close()
+
     def get_findings(
         self,
         session_id: str,
