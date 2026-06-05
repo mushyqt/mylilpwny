@@ -17,6 +17,7 @@ from mylilpwny.core.scope import ScopeValidator
 from mylilpwny.logging import get_logger, setup_logging
 from mylilpwny.persistence.db import setup_database
 from mylilpwny.persistence.session import SessionManager
+from mylilpwny.reporting.report import build_report_data, console_summary, to_json, to_markdown
 
 app = typer.Typer(
     name="mylilpwny",
@@ -170,10 +171,20 @@ def run(
     success = sum(1 for r in results if r.success)
     final_status = "complete" if success == len(results) else "partial"
     obj.session_manager.update_status(session_id, final_status)
-    console.print(
-        f"\n[bold]Done.[/bold] {success}/{len(results)} targets completed. "
-        f"Session: [cyan]{session_id}[/cyan]"
-    )
+
+    # TASK-027: console summary after every run
+    try:
+        report_data = build_report_data(obj.session_manager, session_id)
+        summary = console_summary(report_data)
+        console.print(Panel(
+            summary,
+            title=f"[bold]Run complete[/bold] — {success}/{len(results)} targets",
+            border_style="green" if success == len(results) else "yellow",
+        ))
+    except Exception:
+        console.print(f"\n[bold]Done.[/bold] {success}/{len(results)} targets completed.")
+
+    console.print(f"Session: [cyan]{session_id}[/cyan]")
 
 
 @app.command()
@@ -249,8 +260,29 @@ def report(
         raise typer.Exit(1)
 
     log.info("report requested", session_id=session_id, format=fmt)
-    console.print(f"Generating [bold]{fmt}[/bold] report for session [cyan]{session_id}[/cyan]")
-    console.print("[dim]Reporting not yet implemented — coming in Sprint 5.[/dim]")
+
+    try:
+        data = build_report_data(obj.session_manager, session_id)
+    except ValueError as e:
+        console.print(f"[red]Error:[/red] {e}")
+        raise typer.Exit(1)
+
+    if fmt == "json":
+        output_text = to_json(data)
+    elif fmt in ("markdown", "md"):
+        output_text = to_markdown(data)
+    else:
+        console.print(f"[red]Error:[/red] Unknown format '{fmt}'. Use json or markdown.")
+        raise typer.Exit(1)
+
+    # Write to file in output directory
+    ext = "json" if fmt == "json" else "md"
+    out_file = obj.output / "reports" / f"{session_id}.{ext}"
+    out_file.parent.mkdir(parents=True, exist_ok=True)
+    out_file.write_text(output_text)
+
+    console.print(output_text)
+    console.print(f"\n[dim]Saved to {out_file}[/dim]")
 
 
 @app.command("check-deps")
