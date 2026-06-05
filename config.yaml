@@ -26,7 +26,7 @@ timeouts:
 
 agent:
   provider: ollama
-  model: qwen2.5:14b
+  model: qwen2.5:7b        # 53% GPU on RTX 3050 4GB — ~10s/decision
   base_url: http://localhost:11434
   max_iterations: 20
-  timeout: 300
+  timeout: 120

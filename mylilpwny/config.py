@@ -32,7 +32,7 @@ class Timeouts(BaseModel):
 
 class AgentConfig(BaseModel):
     provider: Literal["ollama"] = "ollama"
-    model: str = "qwen2.5:14b"
+    model: str = "qwen2.5:7b"
     base_url: str = "http://localhost:11434"
     max_iterations: int = Field(default=20, gt=0)
     timeout: float = Field(default=300.0, gt=0)

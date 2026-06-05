@@ -28,7 +28,13 @@ Respond with exactly this JSON structure (replace the angle-bracket placeholders
   "risk_assessment": "<low|medium|high|critical>",
   "done": false
 
-If the objective is complete or you are stuck, set tool_name to done and done to true.\
+If the objective is complete or you are stuck, set tool_name to done and done to true.
+
+## Progression rules
+
+- Do NOT repeat a tool that already appears in the action history below.
+- The natural order is: recon → portscan → servicenum → vulnanalysis → done.
+- Move to the next stage once the current one has results in the findings list.\
 """
 
 
@@ -80,13 +86,16 @@ def build_user_message(context: AgentContext) -> str:
         parts.append("## Current findings\nNone yet.")
 
     if context.history:
-        last = context.history[-1]
-        parts.append(
-            f"## Last action taken\n"
-            f"tool={last.tool_name}  confidence={last.confidence:.2f}  "
-            f"risk={last.risk_assessment}\n"
-            f"reasoning: {last.reasoning}"
-        )
+        history_lines: list[str] = []
+        for i, a in enumerate(context.history[-6:], 1):  # last 6 actions
+            status = "BLOCKED" if "BLOCKED" in a.reasoning else "executed"
+            history_lines.append(
+                f"{i}. [{status}] tool={a.tool_name}  confidence={a.confidence:.2f}  "
+                f"risk={a.risk_assessment}"
+            )
+            if a.reasoning and "BLOCKED" not in a.reasoning:
+                history_lines.append(f"   reasoning: {a.reasoning[:150]}")
+        parts.append("## Action history (do NOT repeat these)\n" + "\n".join(history_lines))
 
     parts.append("What is the next action?")
     return "\n\n".join(parts)
