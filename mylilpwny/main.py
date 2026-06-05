@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 from pathlib import Path
 from typing import Annotated, Optional
 
@@ -12,6 +13,7 @@ from rich.table import Table
 
 from mylilpwny.config import Config
 from mylilpwny.core.deps import check_all, missing_required
+from mylilpwny.core.orchestrator import Orchestrator
 from mylilpwny.core.scope import ScopeValidator
 from mylilpwny.logging import get_logger, setup_logging
 
@@ -89,6 +91,8 @@ def main(
 def run(
     ctx: typer.Context,
     target: Annotated[Optional[str], typer.Option("--target", "-t", help="Override global target")] = None,
+    skip: Annotated[Optional[str], typer.Option("--skip", help="Comma-separated stages to skip")] = None,
+    stages: Annotated[Optional[str], typer.Option("--stages", help="Comma-separated stages to run (default: all)")] = None,
 ) -> None:
     """Run the full recon → scan → enum → analysis pipeline."""
     obj: AppContext = ctx.obj
@@ -99,34 +103,37 @@ def run(
         console.print("[red]Error:[/red] --target is required for run.")
         raise typer.Exit(1)
 
-    run_dir = setup_logging(obj.output, level="DEBUG" if False else "INFO")
+    run_dir = setup_logging(obj.output)
     log.info("run started", target=effective_target, dry_run=obj.dry_run, run_dir=str(run_dir))
 
-    if obj.dry_run:
-        console.print(Panel(
-            Text.from_markup(
-                f"[bold]DRY RUN[/bold]\n\n"
-                f"Target : [cyan]{effective_target}[/cyan]\n"
-                f"Mode   : [yellow]{obj.config.mode}[/yellow]\n"
-                f"Output : {obj.output}\n\n"
-                "[dim]No tools will be executed.[/dim]"
-            ),
-            title="mylilpwny run",
-            border_style="yellow",
-        ))
-        log.info("dry run complete — no tools executed")
-    else:
-        console.print(Panel(
-            Text.from_markup(
-                f"Target : [cyan]{effective_target}[/cyan]\n"
-                f"Mode   : [yellow]{obj.config.mode}[/yellow]\n"
-                f"Output : {obj.output}"
-            ),
-            title="mylilpwny run",
-            border_style="green",
-        ))
-        log.info("pipeline not yet implemented")
-        console.print("[dim]Pipeline not yet implemented — coming in Sprint 2+.[/dim]")
+    border = "yellow" if obj.dry_run else "green"
+    label = "DRY RUN\n\n" if obj.dry_run else ""
+    console.print(Panel(
+        Text.from_markup(
+            f"[bold]{label}[/bold]"
+            f"Target : [cyan]{effective_target}[/cyan]\n"
+            f"Mode   : [yellow]{obj.config.mode}[/yellow]\n"
+            f"Output : {obj.output}"
+            + ("\n\n[dim]No tools will be executed.[/dim]" if obj.dry_run else "")
+        ),
+        title="mylilpwny run",
+        border_style=border,
+    ))
+
+    skip_list = [s.strip() for s in skip.split(",")] if skip else None
+    stages_list = [s.strip() for s in stages.split(",")] if stages else None
+
+    orchestrator = Orchestrator(obj.config, obj.scope)
+    results = asyncio.run(orchestrator.run(
+        effective_target,
+        stages=stages_list,
+        skip=skip_list,
+        dry_run=obj.dry_run,
+    ))
+
+    # Summary
+    success = sum(1 for r in results if r.success)
+    console.print(f"\n[bold]Done.[/bold] {success}/{len(results)} targets completed successfully.")
 
 
 @app.command()
