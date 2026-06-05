@@ -14,7 +14,7 @@ from mylilpwny.config import Config
 from mylilpwny.core.deps import check_all, missing_required
 from mylilpwny.core.orchestrator import Orchestrator
 from mylilpwny.core.scope import ScopeValidator
-from mylilpwny.logging import get_logger, setup_logging
+from mylilpwny.logging import get_logger, setup_logging, setup_run_logging
 from mylilpwny.persistence.db import setup_database
 from mylilpwny.persistence.session import SessionManager
 from mylilpwny.reporting.report import build_report_data, console_summary, to_json, to_markdown
@@ -119,8 +119,8 @@ def run(
         console.print("[red]Error:[/red] --target is required for run.")
         raise typer.Exit(1)
 
-    # Set up file logging for this run
-    run_dir = setup_logging(obj.output, verbose=obj.verbose)
+    # Add file handler for this run without reconfiguring structlog
+    run_dir = setup_run_logging(obj.output, verbose=obj.verbose)
 
     lg = get_logger("run")
 
