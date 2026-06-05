@@ -14,7 +14,7 @@ from mylilpwny.logging import get_logger, setup_logging
 
 app = typer.Typer(
     name="mylilpwny",
-    help="Autonomous AI-powered pentest and bug bounty agent.",
+    help="Autonomous pentest and bug bounty agent.",
     no_args_is_help=True,
     rich_markup_mode="rich",
 )

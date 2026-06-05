@@ -1,7 +1,7 @@
 [project]
 name = "mylilpwny"
 version = "0.1.0"
-description = "Autonomous AI-powered pentest and bug bounty agent"
+description = "Autonomous pentest and bug bounty friend"
 readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [

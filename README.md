@@ -1,6 +1,6 @@
 # mylilpwny
 
-> An autonomous AI-powered pentest and bug bounty agent that operates independently across recon, enumeration, vulnerability analysis, and exploitation — while also serving as a personal security assistant. Extensible, modular, and AI-first from day one.
+> An autonomous pentest and bug bounty friend that operates independently across recon, enumeration, vulnerability analysis, and exploitation — while also serving as a personal security assistant. Extensible, modular, and AI-first from day one.
 
 ## Vision
 
@@ -10,7 +10,7 @@ Build a platform in three layers:
 - **Orchestration engine** — async pipeline with scope enforcement, rate limiting, and state management
 - **AI agent loop** — LLM-driven ReAct loop that reasons about findings and decides what to do next
 
-The platform grows from a CLI pentest automation tool into a fully autonomous agent capable of running bug bounty campaigns with minimal human supervision.
+The platform grows from a CLI pentest automation tool into a fully autonomous friend capable of running bug bounty campaigns with minimal human supervision.
 
 ## Guiding Principles
 
