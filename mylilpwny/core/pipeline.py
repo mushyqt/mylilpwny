@@ -5,6 +5,7 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from mylilpwny.config import Config
+from mylilpwny.core.ratelimit import RateLimiter
 from mylilpwny.core.scope import OutOfScopeError, ScopeValidator
 from mylilpwny.core.state import Target, TargetState
 from mylilpwny.logging import get_logger
@@ -94,9 +95,11 @@ async def _run_stage_with_timeout(
 class Pipeline:
     """Async pipeline runner: recon → portscan → servicenum → vulnanalysis."""
 
-    def __init__(self, config: Config, scope: ScopeValidator) -> None:
+    def __init__(self, config: Config, scope: ScopeValidator,
+                 rate_limiter: RateLimiter | None = None) -> None:
         self.config = config
         self.scope = scope
+        self.rate_limiter = rate_limiter
 
     async def run(
         self,
@@ -135,6 +138,9 @@ class Pipeline:
             module = module_cls()
             timeout = getattr(self.config.timeouts, stage, self.config.timeouts.default)
             options = _build_options(stage, target, self.config, extra)
+
+            if self.rate_limiter:
+                await self.rate_limiter.acquire(target.input)
 
             log.info("stage started", stage=stage, target=target.input, dry_run=dry_run)
 

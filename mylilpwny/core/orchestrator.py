@@ -10,6 +10,7 @@ from rich.progress import BarColumn, Progress, SpinnerColumn, TaskProgressColumn
 
 from mylilpwny.config import Config
 from mylilpwny.core.pipeline import Pipeline, StageResult
+from mylilpwny.core.ratelimit import RateLimiter
 from mylilpwny.core.scope import ScopeValidator
 from mylilpwny.core.state import Target
 from mylilpwny.logging import get_logger
@@ -75,6 +76,10 @@ class Orchestrator:
     def __init__(self, config: Config, scope: ScopeValidator) -> None:
         self.config = config
         self.scope = scope
+        self.rate_limiter = RateLimiter(
+            global_rps=float(self.config.rate_limit.rps),
+            per_target_rps=float(self.config.rate_limit.rps),
+        )
 
     async def run(
         self,
@@ -108,7 +113,7 @@ class Orchestrator:
             async def _run_one(target: Target) -> RunResult:
                 async with semaphore:
                     progress.update(overall, description=f"[cyan]{target.input}")
-                    pipeline = Pipeline(self.config, self.scope)
+                    pipeline = Pipeline(self.config, self.scope, self.rate_limiter)
                     try:
                         stage_results = await pipeline.run(
                             target, stages=stages, skip=skip,
