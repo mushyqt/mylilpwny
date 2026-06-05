@@ -3,6 +3,7 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from typing import Any
 
+from sqlalchemy import func
 from sqlalchemy.orm import Session as SASession, sessionmaker
 
 from mylilpwny.persistence.models import (
@@ -164,6 +165,22 @@ class SessionManager:
                 .limit(limit)
                 .all()
             )
+        finally:
+            db.close()
+
+    def list_sessions_with_counts(self, limit: int = 50) -> list[tuple[PentestSession, int]]:
+        """Return (session, target_count) pairs — no lazy loading needed."""
+        db: SASession = self._factory()
+        try:
+            rows = (
+                db.query(PentestSession, func.count(TargetRecord.id).label("target_count"))
+                .outerjoin(TargetRecord, TargetRecord.session_id == PentestSession.id)
+                .group_by(PentestSession.id)
+                .order_by(PentestSession.created_at.desc())
+                .limit(limit)
+                .all()
+            )
+            return [(sess, count) for sess, count in rows]
         finally:
             db.close()
 

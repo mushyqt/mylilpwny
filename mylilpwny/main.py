@@ -41,6 +41,7 @@ class AppContext:
         output: Path,
         scope: ScopeValidator,
         session_manager: SessionManager,
+        verbose: bool,
     ) -> None:
         self.target = target
         self.scope_file = scope_file
@@ -49,6 +50,7 @@ class AppContext:
         self.output = output
         self.scope = scope
         self.session_manager = session_manager
+        self.verbose = verbose
 
 
 @app.callback()
@@ -59,7 +61,7 @@ def main(
     config_path: Annotated[Path, typer.Option("--config", "-c", help="Path to config.yaml")] = Path("config.yaml"),
     dry_run: Annotated[bool, typer.Option("--dry-run", help="Plan actions without executing them")] = False,
     output: Annotated[Optional[Path], typer.Option("--output", "-o", help="Output directory")] = None,
-    verbose: Annotated[bool, typer.Option("--verbose", "-v", help="Enable debug logging")] = False,
+    verbose: Annotated[bool, typer.Option("--verbose", "-v", help="Show detailed logs in terminal")] = False,
 ) -> None:
     ctx.ensure_object(dict)
     try:
@@ -72,7 +74,8 @@ def main(
     if scope_file:
         cfg.scope_file = str(scope_file)
 
-    setup_logging(level="DEBUG" if verbose else "INFO")
+    # Console log level: WARNING by default, DEBUG with --verbose
+    setup_logging(verbose=verbose)
 
     if scope_file:
         scope = ScopeValidator.from_file(scope_file)
@@ -92,6 +95,7 @@ def main(
         output=Path(cfg.output_dir),
         scope=scope,
         session_manager=sm,
+        verbose=verbose,
     )
 
 
@@ -101,18 +105,24 @@ def run(
     target: Annotated[Optional[str], typer.Option("--target", "-t", help="Override global target")] = None,
     skip: Annotated[Optional[str], typer.Option("--skip", help="Comma-separated stages to skip")] = None,
     stages: Annotated[Optional[str], typer.Option("--stages", help="Comma-separated stages to run (default: all)")] = None,
+    objective: Annotated[Optional[str], typer.Option("--objective", help="Session objective label (e.g. vuln-scan, full-recon)")] = None,
     resume: Annotated[Optional[str], typer.Option("--resume", help="Resume a previous session by ID")] = None,
+    dry_run: Annotated[Optional[bool], typer.Option("--dry-run/--no-dry-run", help="Override global dry-run flag")] = None,
 ) -> None:
     """Run the full recon → scan → enum → analysis pipeline."""
     obj: AppContext = ctx.obj
-    lg = get_logger("run")
+    # Local --dry-run overrides global if explicitly set
+    effective_dry_run = dry_run if dry_run is not None else obj.dry_run
     effective_target = target or obj.target
 
     if not effective_target and not resume:
         console.print("[red]Error:[/red] --target is required for run.")
         raise typer.Exit(1)
 
-    run_dir = setup_logging(obj.output)
+    # Set up file logging for this run
+    run_dir = setup_logging(obj.output, verbose=obj.verbose)
+
+    lg = get_logger("run")
 
     # Resolve session: resume existing or create new
     session_id: str
@@ -123,7 +133,6 @@ def run(
             raise typer.Exit(1)
         session_id = resume
         if not effective_target:
-            # Infer target from first persisted target record
             targets_db = obj.session_manager.get_targets(session_id)
             if targets_db:
                 effective_target = ",".join(t.input for t in targets_db)
@@ -135,14 +144,14 @@ def run(
         session_id = obj.session_manager.create_session(
             scope=obj.scope.entries,
             config_snapshot=obj.config.model_dump(),
-            objective=stages,
+            objective=objective,
         )
 
-    lg.info("run started", target=effective_target, dry_run=obj.dry_run,
+    lg.info("run started", target=effective_target, dry_run=effective_dry_run,
             session_id=session_id, run_dir=str(run_dir))
 
-    border = "yellow" if obj.dry_run else "green"
-    label = "DRY RUN\n\n" if obj.dry_run else ""
+    border = "yellow" if effective_dry_run else "green"
+    label = "DRY RUN\n\n" if effective_dry_run else ""
     console.print(Panel(
         Text.from_markup(
             f"[bold]{label}[/bold]"
@@ -150,7 +159,7 @@ def run(
             f"Session : [dim]{session_id}[/dim]\n"
             f"Mode    : [yellow]{obj.config.mode}[/yellow]\n"
             f"Output  : {obj.output}"
-            + ("\n\n[dim]No tools will be executed.[/dim]" if obj.dry_run else "")
+            + ("\n\n[dim]No tools will be executed.[/dim]" if effective_dry_run else "")
         ),
         title="mylilpwny run",
         border_style=border,
@@ -164,7 +173,7 @@ def run(
         effective_target,  # type: ignore[arg-type]
         stages=stages_list,
         skip=skip_list,
-        dry_run=obj.dry_run,
+        dry_run=effective_dry_run,
         session_id=session_id,
     ))
 
@@ -172,7 +181,6 @@ def run(
     final_status = "complete" if success == len(results) else "partial"
     obj.session_manager.update_status(session_id, final_status)
 
-    # TASK-027: console summary after every run
     try:
         report_data = build_report_data(obj.session_manager, session_id)
         summary = console_summary(report_data)
@@ -195,22 +203,19 @@ def scan(
 ) -> None:
     """Run a single scan module against a target."""
     obj: AppContext = ctx.obj
-    log = get_logger("scan")
     effective_target = target or obj.target
 
     if not effective_target:
         console.print("[red]Error:[/red] --target is required for scan.")
         raise typer.Exit(1)
 
-    log.info("scan started", module=module, target=effective_target, dry_run=obj.dry_run)
     prefix = "[yellow]DRY RUN[/yellow] " if obj.dry_run else ""
     console.print(f"{prefix}Running module [bold]{module}[/bold] against [cyan]{effective_target}[/cyan]")
 
     if obj.dry_run:
         console.print("[dim]No tools will be executed.[/dim]")
-        log.info("dry run — skipping execution", module=module)
     else:
-        console.print("[dim]Module not yet implemented — coming in Sprint 2+.[/dim]")
+        console.print("[dim]Use 'run' to execute the full pipeline.[/dim]")
 
 
 @app.command()
@@ -225,7 +230,6 @@ def exploit(
 ) -> None:
     """List or execute Metasploit exploit modules. Execution requires --confirm."""
     obj: AppContext = ctx.obj
-    log = get_logger("exploit")
     effective_target = target or obj.target
 
     if not effective_target:
@@ -241,7 +245,8 @@ def exploit(
         console.print(f"[yellow]DRY RUN[/yellow] exploit module={module or '(list)'} target={effective_target}")
         return
 
-    log.warning("exploit command invoked", target=effective_target, module=module, confirmed=confirm)
+    get_logger("exploit").warning("exploit command invoked",
+                                  target=effective_target, module=module, confirmed=confirm)
     console.print("[dim]Exploit module not yet wired to pipeline — use the module API directly.[/dim]")
 
 
@@ -250,16 +255,19 @@ def report(
     ctx: typer.Context,
     session_id: Annotated[Optional[str], typer.Option("--session", "-s", help="Session ID to report on")] = None,
     fmt: Annotated[str, typer.Option("--format", "-f", help="Output format: json, markdown")] = "markdown",
+    save: Annotated[bool, typer.Option("--save/--no-save", help="Save report to output/reports/")] = True,
 ) -> None:
     """Generate a report for a session."""
     obj: AppContext = ctx.obj
-    log = get_logger("report")
 
     if not session_id:
-        console.print("[red]Error:[/red] --session is required for report.")
-        raise typer.Exit(1)
-
-    log.info("report requested", session_id=session_id, format=fmt)
+        # Default to most recent session
+        rows = obj.session_manager.list_sessions(limit=1)
+        if not rows:
+            console.print("[red]Error:[/red] No sessions found. Run a scan first.")
+            raise typer.Exit(1)
+        session_id = rows[0].id
+        console.print(f"[dim]Using most recent session: {session_id}[/dim]")
 
     try:
         data = build_report_data(obj.session_manager, session_id)
@@ -275,14 +283,14 @@ def report(
         console.print(f"[red]Error:[/red] Unknown format '{fmt}'. Use json or markdown.")
         raise typer.Exit(1)
 
-    # Write to file in output directory
-    ext = "json" if fmt == "json" else "md"
-    out_file = obj.output / "reports" / f"{session_id}.{ext}"
-    out_file.parent.mkdir(parents=True, exist_ok=True)
-    out_file.write_text(output_text)
-
     console.print(output_text)
-    console.print(f"\n[dim]Saved to {out_file}[/dim]")
+
+    if save:
+        ext = "json" if fmt == "json" else "md"
+        out_file = obj.output / "reports" / f"{session_id}.{ext}"
+        out_file.parent.mkdir(parents=True, exist_ok=True)
+        out_file.write_text(output_text)
+        console.print(f"\n[dim]Saved to {out_file}[/dim]")
 
 
 @app.command("check-deps")
@@ -325,7 +333,7 @@ def list_sessions(
 ) -> None:
     """List recent pentest sessions."""
     obj: AppContext = ctx.obj
-    rows = obj.session_manager.list_sessions(limit=limit)
+    rows = obj.session_manager.list_sessions_with_counts(limit=limit)
     if not rows:
         console.print("[dim]No sessions found.[/dim]")
         return
@@ -335,9 +343,9 @@ def list_sessions(
     table.add_column("Created", style="dim")
     table.add_column("Status")
     table.add_column("Objective")
-    table.add_column("Targets")
+    table.add_column("Targets", justify="right")
 
-    for s in rows:
+    for s, count in rows:
         status_style = {"running": "yellow", "complete": "green", "partial": "blue"}.get(
             s.status, "dim"
         )
@@ -346,7 +354,7 @@ def list_sessions(
             s.created_at.strftime("%Y-%m-%d %H:%M") if s.created_at else "—",
             f"[{status_style}]{s.status}[/{status_style}]",
             s.objective or "—",
-            str(len(s.targets)),
+            str(count),
         )
     console.print(table)
 

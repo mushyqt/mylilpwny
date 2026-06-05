@@ -7,13 +7,17 @@ from pathlib import Path
 import structlog
 
 
-def setup_logging(output_dir: str | Path | None = None, level: str = "INFO") -> Path | None:
+def setup_logging(
+    output_dir: str | Path | None = None,
+    *,
+    verbose: bool = False,
+) -> Path | None:
     """Configure structlog for console + optional file output.
 
+    Console shows WARNING by default; DEBUG when verbose=True.
+    File (when output_dir provided) always captures INFO and above.
     Returns the run log directory when output_dir is provided, None otherwise.
     """
-    log_level = getattr(logging, level.upper(), logging.INFO)
-
     shared_processors: list[structlog.types.Processor] = [
         structlog.stdlib.add_log_level,
         structlog.stdlib.add_logger_name,
@@ -41,11 +45,12 @@ def setup_logging(output_dir: str | Path | None = None, level: str = "INFO") -> 
 
     console_handler = logging.StreamHandler()
     console_handler.setFormatter(console_formatter)
+    console_handler.setLevel(logging.DEBUG if verbose else logging.WARNING)
 
     root = logging.getLogger()
     root.handlers.clear()
     root.addHandler(console_handler)
-    root.setLevel(log_level)
+    root.setLevel(logging.DEBUG)  # let handlers decide what to show
 
     if output_dir is None:
         return None
@@ -63,6 +68,7 @@ def setup_logging(output_dir: str | Path | None = None, level: str = "INFO") -> 
 
     file_handler = logging.FileHandler(run_dir / "run.log")
     file_handler.setFormatter(file_formatter)
+    file_handler.setLevel(logging.INFO)
     root.addHandler(file_handler)
 
     return run_dir
