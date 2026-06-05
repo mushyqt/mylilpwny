@@ -9,6 +9,7 @@ from rich.panel import Panel
 from rich.text import Text
 
 from mylilpwny.config import Config
+from mylilpwny.core.scope import ScopeValidator
 from mylilpwny.logging import get_logger, setup_logging
 
 app = typer.Typer(
@@ -31,12 +32,14 @@ class AppContext:
         config: Config,
         dry_run: bool,
         output: Path,
+        scope: ScopeValidator,
     ) -> None:
         self.target = target
         self.scope_file = scope_file
         self.config = config
         self.dry_run = dry_run
         self.output = output
+        self.scope = scope
 
 
 @app.callback()
@@ -62,12 +65,20 @@ def main(
 
     setup_logging(level="DEBUG" if verbose else "INFO")
 
+    if scope_file:
+        scope = ScopeValidator.from_file(scope_file)
+    elif target:
+        scope = ScopeValidator.from_target(target)
+    else:
+        scope = ScopeValidator([])
+
     ctx.obj = AppContext(
         target=target,
         scope_file=scope_file,
         config=cfg,
         dry_run=dry_run,
         output=Path(cfg.output_dir),
+        scope=scope,
     )
 
 
