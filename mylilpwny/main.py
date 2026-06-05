@@ -10,6 +10,8 @@ from rich.panel import Panel
 from rich.text import Text
 from rich.table import Table
 
+from mylilpwny.agent.loop import run_agent
+from mylilpwny.agent.providers.ollama import OllamaProvider
 from mylilpwny.config import Config
 from mylilpwny.core.deps import check_all, missing_required
 from mylilpwny.core.orchestrator import Orchestrator
@@ -291,6 +293,96 @@ def report(
         out_file.parent.mkdir(parents=True, exist_ok=True)
         out_file.write_text(output_text)
         console.print(f"\n[dim]Saved to {out_file}[/dim]")
+
+
+@app.command()
+def agent(
+    ctx: typer.Context,
+    target: Annotated[Optional[str], typer.Option("--target", "-t", help="Override global target")] = None,
+    objective: Annotated[str, typer.Option("--objective", help="Agent objective")] = "full-recon",
+    resume: Annotated[Optional[str], typer.Option("--resume", help="Resume session by ID")] = None,
+    dry_run: Annotated[Optional[bool], typer.Option("--dry-run/--no-dry-run")] = None,
+    max_iter: Annotated[Optional[int], typer.Option("--max-iter", help="Override max iterations")] = None,
+) -> None:
+    """Run the AI agent loop (Ollama-backed ReAct) against a target."""
+    obj: AppContext = ctx.obj
+    effective_dry_run = dry_run if dry_run is not None else obj.dry_run
+    effective_target = target or obj.target
+
+    if not effective_target and not resume:
+        console.print("[red]Error:[/red] --target is required.")
+        raise typer.Exit(1)
+
+    run_dir = setup_run_logging(obj.output, verbose=obj.verbose)
+    lg = get_logger("agent-cmd")
+
+    # Session
+    if resume:
+        existing = obj.session_manager.get_session(resume)
+        if existing is None:
+            console.print(f"[red]Error:[/red] Session [cyan]{resume}[/cyan] not found.")
+            raise typer.Exit(1)
+        session_id = resume
+        if not effective_target:
+            targets_db = obj.session_manager.get_targets(session_id)
+            effective_target = targets_db[0].input if targets_db else None
+        console.print(f"[yellow]Resuming session[/yellow] [cyan]{session_id}[/cyan]")
+    else:
+        session_id = obj.session_manager.create_session(
+            scope=obj.scope.entries,
+            config_snapshot=obj.config.model_dump(),
+            objective=objective,
+        )
+
+    cfg = obj.config.agent
+    iterations = max_iter or cfg.max_iterations
+    provider = OllamaProvider(
+        base_url=cfg.base_url,
+        model=cfg.model,
+        timeout=cfg.timeout,
+    )
+    orchestrator = Orchestrator(obj.config, obj.scope, session_manager=obj.session_manager)
+
+    border = "yellow" if effective_dry_run else "cyan"
+    label = "[yellow]DRY RUN[/yellow] — " if effective_dry_run else ""
+    console.print(Panel(
+        Text.from_markup(
+            f"{label}[bold]AI Agent Loop[/bold]\n\n"
+            f"Target    : [cyan]{effective_target}[/cyan]\n"
+            f"Objective : [bold]{objective}[/bold]\n"
+            f"Model     : [dim]{cfg.model}[/dim]\n"
+            f"Max iter  : {iterations}\n"
+            f"Session   : [dim]{session_id}[/dim]"
+        ),
+        title="mylilpwny agent",
+        border_style=border,
+    ))
+
+    lg.info("agent loop starting", target=effective_target, session_id=session_id, model=cfg.model)
+
+    history = asyncio.run(run_agent(
+        provider=provider,
+        orchestrator=orchestrator,
+        session_manager=obj.session_manager,
+        session_id=session_id,
+        target=effective_target,  # type: ignore[arg-type]
+        objective=objective,
+        dry_run=effective_dry_run,
+        max_iterations=iterations,
+    ))
+
+    done_action = next((a for a in reversed(history) if a.done), None)
+    obj.session_manager.update_status(session_id, "complete")
+
+    console.print(Panel(
+        Text.from_markup(
+            f"[bold]Agent complete[/bold] — {len(history)} actions\n\n"
+            + (f"Summary: {done_action.parameters.get('summary', '—')}" if done_action else "Max iterations reached.")
+        ),
+        title="Agent done",
+        border_style="green",
+    ))
+    console.print(f"Session: [cyan]{session_id}[/cyan]")
 
 
 @app.command("check-deps")

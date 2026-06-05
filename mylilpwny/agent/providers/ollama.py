@@ -14,7 +14,7 @@ log = get_logger(__name__)
 
 _DEFAULT_BASE_URL = "http://localhost:11434"
 _DEFAULT_MODEL = "llama3.1"
-_DEFAULT_TIMEOUT = 120.0
+_DEFAULT_TIMEOUT = 300.0
 
 # Fallback action when the LLM response can't be parsed
 _PARSE_FAILURE_ACTION = AgentAction(

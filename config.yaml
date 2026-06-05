@@ -23,3 +23,10 @@ timeouts:
   servicenum: 120
   vulnanalysis: 60
   default: 60
+
+agent:
+  provider: ollama
+  model: qwen2.5:14b
+  base_url: http://localhost:11434
+  max_iterations: 20
+  timeout: 300

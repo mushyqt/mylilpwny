@@ -21,11 +21,11 @@ human review is needed.
 
 Respond with exactly this JSON structure (replace the angle-bracket placeholders):
 
-  "reasoning": "<your step-by-step thinking>",
-  "tool_name": "<tool name, or done when objective is complete>",
-  "parameters": {},
-  "confidence": 0.0,
-  "risk_assessment": "low",
+  "reasoning": "<your step-by-step thinking — required>",
+  "tool_name": "<exact tool name from the list above, or done>",
+  "parameters": {"<param_name>": "<value>"},
+  "confidence": "<float from 0.1 to 1.0 — how confident you are this is the right next step>",
+  "risk_assessment": "<low|medium|high|critical>",
   "done": false
 
 If the objective is complete or you are stuck, set tool_name to done and done to true.\

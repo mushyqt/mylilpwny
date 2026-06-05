@@ -30,8 +30,17 @@ class Timeouts(BaseModel):
     default: int = Field(default=60, gt=0)
 
 
+class AgentConfig(BaseModel):
+    provider: Literal["ollama"] = "ollama"
+    model: str = "qwen2.5:14b"
+    base_url: str = "http://localhost:11434"
+    max_iterations: int = Field(default=20, gt=0)
+    timeout: float = Field(default=300.0, gt=0)
+
+
 class Config(BaseModel):
     mode: Literal["manual", "semi-auto", "autonomous"] = "semi-auto"
+    agent: AgentConfig = Field(default_factory=AgentConfig)
     rate_limit: RateLimit = Field(default_factory=RateLimit)
     scope_file: str | None = None
     tool_paths: ToolPaths = Field(default_factory=ToolPaths)
