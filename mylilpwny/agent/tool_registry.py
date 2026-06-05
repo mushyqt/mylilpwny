@@ -76,6 +76,37 @@ _BUILTIN_SCHEMAS: list[ToolSchema] = [
         risk_level="low",
     ),
     ToolSchema(
+        name="remember",
+        description=(
+            "Store a short observation or hypothesis for this session. "
+            "Use it to note interesting findings, credential hints, or next ideas. "
+            "Notes are shown in every subsequent prompt."
+        ),
+        parameters={
+            "type": "object",
+            "properties": {
+                "note": {"type": "string", "description": "The observation to remember (max 200 chars)"},
+            },
+            "required": ["note"],
+        },
+        risk_level="low",
+    ),
+    ToolSchema(
+        name="query_memory",
+        description=(
+            "Search the knowledge base and historical findings for a service, version, or CVE. "
+            "Use before vulnanalysis to check if known exploits exist."
+        ),
+        parameters={
+            "type": "object",
+            "properties": {
+                "query": {"type": "string", "description": "Service name, version string, or CVE ID"},
+            },
+            "required": ["query"],
+        },
+        risk_level="low",
+    ),
+    ToolSchema(
         name="done",
         description="Signal that the objective is complete or the agent is unable to proceed.",
         parameters={

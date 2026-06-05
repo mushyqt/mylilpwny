@@ -1,9 +1,10 @@
 from __future__ import annotations
 
-import asyncio
-from typing import Any
-
+from mylilpwny.agent import risk as risk_mod
 from mylilpwny.agent.context import build_agent_context
+from mylilpwny.agent.gate import ConfirmationGate
+from mylilpwny.agent.knowledge import KnowledgeBase
+from mylilpwny.agent.memory import AgentMemory
 from mylilpwny.agent.providers.base import LLMProvider
 from mylilpwny.agent.tool_registry import get_all_tools
 from mylilpwny.agent.types import AgentAction, AgentContext
@@ -13,21 +14,14 @@ from mylilpwny.persistence.session import SessionManager
 
 log = get_logger(__name__)
 
-_STAGE_TOOLS = {"recon", "portscan", "servicenum", "vulnanalysis"}
-
-# Tool name → pipeline stage mapping
-_TOOL_TO_STAGE: dict[str, str] = {
-    "recon": "recon",
-    "portscan": "portscan",
-    "servicenum": "servicenum",
-    "vulnanalysis": "vulnanalysis",
-}
+_PIPELINE_TOOLS = {"recon", "portscan", "servicenum", "vulnanalysis"}
+_META_TOOLS = {"remember", "query_memory", "done"}
 
 
 class AgentLoop:
-    """ReAct (Reason → Act) agent loop.
+    """ReAct (Reason → Act) agent loop — Sprint 7 complete.
 
-    Observe  → Think (LLM) → Act (Orchestrator) → repeat.
+    Observe → Think (LLM) → [Gate] → Act (Orchestrator / memory) → repeat.
     """
 
     def __init__(
@@ -37,18 +31,15 @@ class AgentLoop:
         session_manager: SessionManager,
         *,
         max_iterations: int = 20,
-        high_risk_threshold: str = "high",  # pause at this level and above
+        mode: str = "semi-auto",
+        dry_run: bool = False,
     ) -> None:
         self._provider = provider
         self._orchestrator = orchestrator
         self._sm = session_manager
         self._max_iterations = max_iterations
-        self._high_risk_threshold = high_risk_threshold
-        self._risk_order = {"low": 0, "medium": 1, "high": 2, "critical": 3}
-
-    def _is_high_risk(self, action: AgentAction) -> bool:
-        threshold = self._risk_order.get(self._high_risk_threshold, 2)
-        return self._risk_order.get(action.risk_assessment, 0) >= threshold
+        self._gate = ConfirmationGate(mode=mode, dry_run=dry_run)
+        self._dry_run = dry_run
 
     async def run(
         self,
@@ -56,88 +47,121 @@ class AgentLoop:
         target: str,
         *,
         objective: str = "full-recon",
-        dry_run: bool = False,
     ) -> list[AgentAction]:
-        """Run the ReAct loop for a given target. Returns the action history."""
+        """Run the ReAct loop. Returns the full action history."""
         tools = get_all_tools()
         history: list[AgentAction] = []
+        memory = AgentMemory()                    # TASK-034: short-term memory
+        kb = KnowledgeBase(self._sm)              # TASK-035 + 036: knowledge base
 
-        log.info("agent loop started", target=target, objective=objective, dry_run=dry_run)
+        log.info("agent loop started", target=target, objective=objective, dry_run=self._dry_run)
 
         for iteration in range(1, self._max_iterations + 1):
             log.debug("agent iteration", n=iteration, target=target)
 
-            # Observe: build context from DB state
+            # --- Observe ---
             ctx = build_agent_context(
                 self._sm,
                 session_id,
                 objective=objective,
                 current_target=target,
                 history=history,
+                memory_notes=memory.snapshot(),
             )
 
-            # Think: ask LLM for next action
+            # --- Think ---
             action = await self._provider.plan_next_action(ctx, tools)
-            history.append(action)
 
+            # --- TASK-037: Risk classifier override ---
+            effective_risk = risk_mod.classify(action)
+            if effective_risk != action.risk_assessment:
+                log.debug("risk reclassified", tool=action.tool_name,
+                          llm=action.risk_assessment, effective=effective_risk)
+                action = AgentAction(
+                    tool_name=action.tool_name,
+                    parameters=action.parameters,
+                    reasoning=action.reasoning,
+                    confidence=action.confidence,
+                    risk_assessment=effective_risk,
+                    done=action.done,
+                )
+
+            history.append(action)
             log.info(
                 "agent decided",
                 iteration=iteration,
                 tool=action.tool_name,
                 confidence=f"{action.confidence:.2f}",
-                risk=action.risk_assessment,
+                risk=effective_risk,
                 done=action.done,
             )
 
-            # Terminate conditions
+            # --- Terminate ---
             if action.done or action.tool_name == "done":
                 log.info("agent loop complete", iterations=iteration, target=target)
                 break
 
-            # High-risk gate: log a warning (human gate in TASK-038 will add interactivity)
-            if self._is_high_risk(action):
-                log.warning(
-                    "high-risk action skipped — human confirmation required",
-                    tool=action.tool_name,
-                    risk=action.risk_assessment,
-                )
-                # Record the skip in history so the LLM knows it was blocked
-                history.append(AgentAction(
-                    tool_name=action.tool_name,
-                    parameters=action.parameters,
-                    reasoning="BLOCKED: high-risk action requires human confirmation.",
-                    confidence=0.0,
-                    risk_assessment=action.risk_assessment,
-                    done=False,
-                ))
-                continue
+            # --- TASK-038: Confirmation gate ---
+            if self._gate.requires_confirmation(action, effective_risk):
+                decision = self._gate.request_confirmation(action, effective_risk)
+                if decision == "abort":
+                    log.warning("agent loop aborted by user", iteration=iteration)
+                    history.append(_blocked(action, "ABORTED by user."))
+                    break
+                if decision == "skip":
+                    log.info("action skipped by user", tool=action.tool_name)
+                    history.append(_blocked(action, "SKIPPED by user."))
+                    continue
 
-            # Act: execute through orchestrator
-            if not dry_run and action.tool_name in _TOOL_TO_STAGE:
-                stage = _TOOL_TO_STAGE[action.tool_name]
+            # --- Act ---
+            if action.tool_name == "remember":
+                # TASK-034: store note in short-term memory
+                note = action.parameters.get("note", "")
+                if note:
+                    memory.add(note)
+                    log.info("agent remembered", note=note[:80])
+
+            elif action.tool_name == "query_memory":
+                # TASK-035: query knowledge base and inject result as a note
+                query = action.parameters.get("query", "")
+                if query:
+                    result = kb.query(query)
+                    memory.add(f"[KB] {result[:300]}")
+                    log.info("agent queried KB", query=query)
+
+            elif action.tool_name in _PIPELINE_TOOLS:
                 act_target = action.parameters.get("target", target)
-                log.info("agent executing stage", stage=stage, target=act_target)
-                try:
-                    await self._orchestrator.run(
-                        act_target,
-                        stages=[stage],
-                        session_id=session_id,
-                    )
-                except Exception as exc:
-                    log.warning("stage execution failed", stage=stage, error=str(exc))
-            elif dry_run:
-                log.info(
-                    "dry-run: would execute",
-                    tool=action.tool_name,
-                    params=action.parameters,
-                )
+                if self._dry_run:
+                    log.info("dry-run: would execute", tool=action.tool_name, target=act_target)
+                else:
+                    log.info("agent executing stage", stage=action.tool_name, target=act_target)
+                    try:
+                        await self._orchestrator.run(
+                            act_target,
+                            stages=[action.tool_name],
+                            session_id=session_id,
+                        )
+                    except Exception as exc:
+                        log.warning("stage execution failed", stage=action.tool_name, error=str(exc))
+
             else:
-                log.warning("unknown tool requested by agent", tool=action.tool_name)
+                log.warning("unknown tool — skipping", tool=action.tool_name)
 
         else:
             log.warning("agent loop hit max iterations", max=self._max_iterations)
 
         return history
+
+
+def _blocked(action: AgentAction, reason: str) -> AgentAction:
+    return AgentAction(
+        tool_name=action.tool_name,
+        parameters=action.parameters,
+        reasoning=reason,
+        confidence=0.0,
+        risk_assessment=action.risk_assessment,
+        done=False,
+    )
 
 
 async def run_agent(
@@ -150,17 +174,14 @@ async def run_agent(
     objective: str = "full-recon",
     dry_run: bool = False,
     max_iterations: int = 20,
+    mode: str = "semi-auto",
 ) -> list[AgentAction]:
-    """Convenience wrapper that creates and runs an AgentLoop."""
     loop = AgentLoop(
         provider=provider,
         orchestrator=orchestrator,
         session_manager=session_manager,
         max_iterations=max_iterations,
-    )
-    return await loop.run(
-        session_id,
-        target,
-        objective=objective,
+        mode=mode,
         dry_run=dry_run,
     )
+    return await loop.run(session_id, target, objective=objective)

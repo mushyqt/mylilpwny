@@ -405,6 +405,36 @@ class SessionManager:
         finally:
             db.close()
 
+    def get_completed_stages(self, session_id: str, target_input: str) -> list[str]:
+        """Return stages that have a stage_complete audit entry for this target."""
+        entries = self.get_audit_log(session_id)
+        seen: list[str] = []
+        for e in entries:
+            if e.event_type == "stage_complete" and e.target == target_input and e.module:
+                if e.module not in seen:
+                    seen.append(e.module)
+        return seen
+
+    def get_cross_session_findings(
+        self,
+        query: str,
+        *,
+        limit: int = 10,
+    ) -> list[Finding]:
+        """Search vulnerability findings across all sessions matching a query string."""
+        db: SASession = self._factory()
+        try:
+            return (
+                db.query(Finding)
+                .filter(Finding.finding_type == "vulnerability")
+                .filter(Finding.title.ilike(f"%{query}%"))
+                .order_by(Finding.timestamp.desc())
+                .limit(limit)
+                .all()
+            )
+        finally:
+            db.close()
+
     def get_audit_log(self, session_id: str) -> list[AuditEntry]:
         db: SASession = self._factory()
         try:

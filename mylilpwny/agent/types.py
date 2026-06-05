@@ -44,3 +44,5 @@ class AgentContext:
     history: list[AgentAction] = field(default_factory=list)
     current_target: str | None = None
     token_budget: int = 8000
+    completed_stages: list[str] = field(default_factory=list)  # TASK-034
+    memory_notes: list[str] = field(default_factory=list)       # TASK-034

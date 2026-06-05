@@ -5,36 +5,35 @@ from typing import Any
 
 from mylilpwny.agent.types import AgentContext, ToolSchema
 
+_STAGE_ORDER = ["recon", "portscan", "servicenum", "vulnanalysis"]
+
 _SYSTEM_HEADER = """\
-You are an expert penetration tester and bug bounty hunter operating inside an \
-automated security testing framework.
+You are an expert penetration tester operating inside an automated security \
+testing framework. You decide the next action to take against a target.
 
 ## Rules — NEVER violate these
 
-1. Only act on targets explicitly listed in the scope. Refuse to act on anything else.
-2. For actions rated high or critical risk, set confidence < 0.5 and explain why \
-human review is needed.
-3. Always prefer low-risk information-gathering before active exploitation.
+1. Only act on targets explicitly listed in the scope.
+2. Set confidence < 0.5 and risk_assessment high/critical when human review is warranted.
+3. Prefer low-risk information-gathering before any active or destructive action.
 4. Every response MUST be a single valid JSON object — no prose, no markdown fences.
 
 ## Output format
 
-Respond with exactly this JSON structure (replace the angle-bracket placeholders):
-
-  "reasoning": "<your step-by-step thinking — required>",
-  "tool_name": "<exact tool name from the list above, or done>",
-  "parameters": {"<param_name>": "<value>"},
-  "confidence": "<float from 0.1 to 1.0 — how confident you are this is the right next step>",
-  "risk_assessment": "<low|medium|high|critical>",
+  "reasoning": "<step-by-step thinking about current state and what to do next>",
+  "tool_name": "<exact tool name from the list, or done>",
+  "parameters": {"target": "<ip or hostname>"},
+  "confidence": 0.8,
+  "risk_assessment": "low",
   "done": false
 
-If the objective is complete or you are stuck, set tool_name to done and done to true.
+Set done=true and tool_name=done when the objective is complete or you are stuck.
 
 ## Progression rules
 
-- Do NOT repeat a tool that already appears in the action history below.
-- The natural order is: recon → portscan → servicenum → vulnanalysis → done.
-- Move to the next stage once the current one has results in the findings list.\
+- Follow this order: recon → portscan → servicenum → vulnanalysis → done.
+- NEVER call a stage that is already listed under "Completed stages" below.
+- If all stages are complete, call done.\
 """
 
 
@@ -43,7 +42,7 @@ def build_system_prompt(
     available_tools: list[ToolSchema],
 ) -> str:
     tools_json = json.dumps([t.to_dict() for t in available_tools], indent=2)
-    scope_str = "\n".join(f"- {s}" for s in context.scope) or "- (none — all targets allowed)"
+    scope_str = "\n".join(f"- {s}" for s in context.scope) or "- (none specified)"
     return "\n\n".join([
         _SYSTEM_HEADER,
         f"## Available tools\n\n{tools_json}",
@@ -53,49 +52,59 @@ def build_system_prompt(
 
 
 def build_user_message(context: AgentContext) -> str:
-    """Compose the user-turn message from current context state."""
     parts: list[str] = []
 
     if context.current_target:
         parts.append(f"## Current target\n{context.current_target}")
 
-    if context.targets:
-        targets_text = "\n".join(
-            f"- {t.get('input', '?')}  state={t.get('state', '?')}"
-            for t in context.targets
+    # Pipeline progress — this is the primary fix for stage repetition
+    completed = context.completed_stages
+    remaining = [s for s in _STAGE_ORDER if s not in completed]
+    if completed or remaining:
+        parts.append(
+            f"## Pipeline progress\n"
+            f"Completed : {', '.join(completed) if completed else 'none'}\n"
+            f"Remaining : {', '.join(remaining) if remaining else 'none — call done'}"
         )
-        parts.append(f"## Known targets\n{targets_text}")
 
+    # Findings
     if context.findings:
-        # Group by severity for compact display
         by_sev: dict[str, list[Any]] = {}
         for f in context.findings:
             by_sev.setdefault(f.get("severity", "info"), []).append(f)
 
-        finding_lines: list[str] = []
+        lines: list[str] = []
         for sev in ("critical", "high", "medium", "low", "info"):
             group = by_sev.get(sev, [])
             if group:
-                finding_lines.append(f"\n### {sev.capitalize()} ({len(group)})")
-                for f in group[:10]:  # cap per-severity to avoid blowing context
-                    finding_lines.append(f"- [{f.get('finding_type')}] {f.get('title')}")
-                if len(group) > 10:
-                    finding_lines.append(f"  … and {len(group) - 10} more")
-        parts.append("## Current findings\n" + "\n".join(finding_lines))
+                lines.append(f"\n### {sev.capitalize()} ({len(group)})")
+                for f in group[:8]:
+                    lines.append(f"- [{f.get('finding_type')}] {f.get('title')}")
+                if len(group) > 8:
+                    lines.append(f"  … and {len(group) - 8} more")
+        parts.append("## Current findings\n" + "\n".join(lines))
     else:
         parts.append("## Current findings\nNone yet.")
 
-    if context.history:
-        history_lines: list[str] = []
-        for i, a in enumerate(context.history[-6:], 1):  # last 6 actions
-            status = "BLOCKED" if "BLOCKED" in a.reasoning else "executed"
-            history_lines.append(
-                f"{i}. [{status}] tool={a.tool_name}  confidence={a.confidence:.2f}  "
-                f"risk={a.risk_assessment}"
-            )
-            if a.reasoning and "BLOCKED" not in a.reasoning:
-                history_lines.append(f"   reasoning: {a.reasoning[:150]}")
-        parts.append("## Action history (do NOT repeat these)\n" + "\n".join(history_lines))
+    # Memory notes (TASK-034)
+    if context.memory_notes:
+        parts.append("## Agent notes\n" + "\n".join(f"- {n}" for n in context.memory_notes))
 
-    parts.append("What is the next action?")
+    # Action history
+    if context.history:
+        lines = []
+        for i, a in enumerate(context.history[-8:], 1):
+            status = "BLOCKED" if "BLOCKED" in a.reasoning else "done" if a.done else "executed"
+            lines.append(
+                f"{i}. [{status}] {a.tool_name}  confidence={a.confidence:.2f}  risk={a.risk_assessment}"
+            )
+            if a.reasoning and status == "executed":
+                lines.append(f"   → {a.reasoning[:120]}")
+        parts.append("## Action history\n" + "\n".join(lines))
+
+    if remaining:
+        parts.append(f"Next required stage: **{remaining[0]}**\nWhat is your action?")
+    else:
+        parts.append("All stages complete. Call done.")
+
     return "\n\n".join(parts)

@@ -171,13 +171,19 @@ def run(
     stages_list = [s.strip() for s in stages.split(",")] if stages else None
 
     orchestrator = Orchestrator(obj.config, obj.scope, session_manager=obj.session_manager)
-    results = asyncio.run(orchestrator.run(
-        effective_target,  # type: ignore[arg-type]
-        stages=stages_list,
-        skip=skip_list,
-        dry_run=effective_dry_run,
-        session_id=session_id,
-    ))
+    try:
+        results = asyncio.run(orchestrator.run(
+            effective_target,  # type: ignore[arg-type]
+            stages=stages_list,
+            skip=skip_list,
+            dry_run=effective_dry_run,
+            session_id=session_id,
+        ))
+    except KeyboardInterrupt:
+        console.print("\n[yellow]Interrupted.[/yellow]")
+        obj.session_manager.update_status(session_id, "interrupted")
+        console.print(f"Session: [cyan]{session_id}[/cyan]")
+        raise typer.Exit(130)
 
     success = sum(1 for r in results if r.success)
     final_status = "complete" if success == len(results) else "partial"
@@ -196,28 +202,6 @@ def run(
 
     console.print(f"Session: [cyan]{session_id}[/cyan]")
 
-
-@app.command()
-def scan(
-    ctx: typer.Context,
-    target: Annotated[Optional[str], typer.Option("--target", "-t", help="Override global target")] = None,
-    module: Annotated[str, typer.Option("--module", "-m", help="Module to run (recon, portscan, servicenum, vulnanalysis)")] = "recon",
-) -> None:
-    """Run a single scan module against a target."""
-    obj: AppContext = ctx.obj
-    effective_target = target or obj.target
-
-    if not effective_target:
-        console.print("[red]Error:[/red] --target is required for scan.")
-        raise typer.Exit(1)
-
-    prefix = "[yellow]DRY RUN[/yellow] " if obj.dry_run else ""
-    console.print(f"{prefix}Running module [bold]{module}[/bold] against [cyan]{effective_target}[/cyan]")
-
-    if obj.dry_run:
-        console.print("[dim]No tools will be executed.[/dim]")
-    else:
-        console.print("[dim]Use 'run' to execute the full pipeline.[/dim]")
 
 
 @app.command()
@@ -303,6 +287,7 @@ def agent(
     resume: Annotated[Optional[str], typer.Option("--resume", help="Resume session by ID")] = None,
     dry_run: Annotated[Optional[bool], typer.Option("--dry-run/--no-dry-run")] = None,
     max_iter: Annotated[Optional[int], typer.Option("--max-iter", help="Override max iterations")] = None,
+    mode: Annotated[str, typer.Option("--mode", help="Confirmation mode: manual, semi-auto, autonomous")] = "semi-auto",
 ) -> None:
     """Run the AI agent loop (Ollama-backed ReAct) against a target."""
     obj: AppContext = ctx.obj
@@ -311,6 +296,10 @@ def agent(
 
     if not effective_target and not resume:
         console.print("[red]Error:[/red] --target is required.")
+        raise typer.Exit(1)
+
+    if mode not in ("manual", "semi-auto", "autonomous"):
+        console.print("[red]Error:[/red] --mode must be manual, semi-auto, or autonomous.")
         raise typer.Exit(1)
 
     run_dir = setup_run_logging(obj.output, verbose=obj.verbose)
@@ -351,6 +340,7 @@ def agent(
             f"Target    : [cyan]{effective_target}[/cyan]\n"
             f"Objective : [bold]{objective}[/bold]\n"
             f"Model     : [dim]{cfg.model}[/dim]\n"
+            f"Mode      : [yellow]{mode}[/yellow]\n"
             f"Max iter  : {iterations}\n"
             f"Session   : [dim]{session_id}[/dim]"
         ),
@@ -358,18 +348,26 @@ def agent(
         border_style=border,
     ))
 
-    lg.info("agent loop starting", target=effective_target, session_id=session_id, model=cfg.model)
+    lg.info("agent loop starting", target=effective_target, session_id=session_id,
+            model=cfg.model, mode=mode)
 
-    history = asyncio.run(run_agent(
-        provider=provider,
-        orchestrator=orchestrator,
-        session_manager=obj.session_manager,
-        session_id=session_id,
-        target=effective_target,  # type: ignore[arg-type]
-        objective=objective,
-        dry_run=effective_dry_run,
-        max_iterations=iterations,
-    ))
+    try:
+        history = asyncio.run(run_agent(
+            provider=provider,
+            orchestrator=orchestrator,
+            session_manager=obj.session_manager,
+            session_id=session_id,
+            target=effective_target,  # type: ignore[arg-type]
+            objective=objective,
+            dry_run=effective_dry_run,
+            max_iterations=iterations,
+            mode=mode,
+        ))
+    except KeyboardInterrupt:
+        console.print("\n[yellow]Interrupted.[/yellow]")
+        obj.session_manager.update_status(session_id, "interrupted")
+        console.print(f"Session: [cyan]{session_id}[/cyan]")
+        raise typer.Exit(130)
 
     done_action = next((a for a in reversed(history) if a.done), None)
     obj.session_manager.update_status(session_id, "complete")

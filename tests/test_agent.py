@@ -361,8 +361,9 @@ class TestAgentLoop:
         assert len(history) == 5  # max_iterations
 
     @pytest.mark.asyncio
-    async def test_loop_skips_high_risk_actions(self) -> None:
-        """High-risk action is not executed but recorded in history with BLOCKED reasoning."""
+    async def test_loop_skips_high_risk_actions_when_user_says_skip(self) -> None:
+        """Gate returns 'skip' → action recorded in history with SKIPPED reasoning."""
+        from unittest.mock import patch as _patch
         call_count = 0
 
         class HighRiskThenDoneProvider:
@@ -370,7 +371,7 @@ class TestAgentLoop:
                 nonlocal call_count
                 call_count += 1
                 if call_count == 1:
-                    return AgentAction("vulnanalysis", {}, "exploit!", 0.9, "critical", done=False)
+                    return AgentAction("portscan", {"target": "10.0.0.1"}, "scan ports", 0.9, "high", done=False)
                 return AgentAction("done", {"summary": "done"}, "stopped", 1.0, "low", done=True)
 
             async def is_available(self) -> bool:
@@ -378,10 +379,18 @@ class TestAgentLoop:
 
         sm = _sm()
         sid = sm.create_session(scope=["10.0.0.1"])
-        loop = self._make_loop(HighRiskThenDoneProvider())
-        history = await loop.run(sid, "10.0.0.1", objective="recon")
-        blocked = [a for a in history if "BLOCKED" in a.reasoning]
-        assert len(blocked) >= 1
+        loop = AgentLoop(
+            provider=HighRiskThenDoneProvider(),
+            orchestrator=self._make_loop(HighRiskThenDoneProvider())._orchestrator,
+            session_manager=sm,
+            max_iterations=5,
+            mode="manual",  # threshold=medium → portscan(medium) triggers gate
+        )
+        with _patch("mylilpwny.agent.gate.ConfirmationGate.request_confirmation", return_value="skip"):
+            history = await loop.run(sid, "10.0.0.1", objective="recon")
+
+        skipped = [a for a in history if "SKIPPED" in a.reasoning]
+        assert len(skipped) >= 1
 
     @pytest.mark.asyncio
     async def test_dry_run_does_not_call_orchestrator(self) -> None:
@@ -408,6 +417,7 @@ class TestAgentLoop:
             orchestrator=orchestrator,
             session_manager=sm,
             max_iterations=5,
+            dry_run=True,  # dry_run is now an __init__ param
         )
-        await loop.run(sid, "10.0.0.1", dry_run=True)
+        await loop.run(sid, "10.0.0.1")
         orchestrator.run.assert_not_called()
